@@ -205,25 +205,26 @@ pub fn apply_wan_rope(
     cos: &Tensor,
     sin: &Tensor,
 ) -> Result<Tensor> {
+    let in_dtype = x.dtype();
     let (_b, _s, _h, d) = x.dims4()?;
     let half_d = d / 2;
 
-    let cos = cos.to_dtype(x.dtype())?;
-    let sin = sin.to_dtype(x.dtype())?;
+    // All RoPE computation in F32 (matching LTX-2's proven pattern)
+    let x = x.to_dtype(candle_core::DType::F32)?;
+    let cos = cos.to_dtype(candle_core::DType::F32)?;
+    let sin = sin.to_dtype(candle_core::DType::F32)?;
 
     // Split x into real/imag pairs: reshape to [..., D/2, 2], unbind last dim
     let x_pairs = x.reshape((_b, _s, _h, half_d, 2))?;
-    let x_real = x_pairs.narrow(4, 0, 1)?.squeeze(4)?; // [B, S, H, D/2]
+    let x_real = x_pairs.narrow(4, 0, 1)?.squeeze(4)?;
     let x_imag = x_pairs.narrow(4, 1, 1)?.squeeze(4)?;
 
     // Build rotated version: [-x_imag, x_real] interleaved
     let neg_x_imag = x_imag.neg()?;
     let x_rotated = Tensor::stack(&[&neg_x_imag, &x_real], 4)?.reshape((_b, _s, _h, d))?;
 
-    // out = x * cos + x_rotated * sin
-    let out = (x.broadcast_mul(&cos)?.to_dtype(candle_core::DType::F32)?
-        + x_rotated.broadcast_mul(&sin)?.to_dtype(candle_core::DType::F32)?)?
-        .to_dtype(x.dtype())?;
+    // out = x * cos + x_rotated * sin (all F32)
+    let out = (x.broadcast_mul(&cos)? + x_rotated.broadcast_mul(&sin)?)?;
 
-    Ok(out)
+    Ok(out.to_dtype(in_dtype)?)
 }

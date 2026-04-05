@@ -159,15 +159,18 @@ impl WanAttention {
             return Ok(crate::utils::flash_attn::flash_attention(q, k, v, scale, false)?);
         }
 
-        // Fallback: F32 attention
+        // F32 attention matching LTX-2's proven pattern exactly:
+        // - Q, K to F32 for score computation
+        // - Use affine(1/scale) not division (matches PyTorch's internal scaling)
+        // - contiguous() on K transpose before matmul
+        // - V to F32 AFTER softmax, not before
         let scale = (self.head_dim as f64).sqrt();
-        let q = q.to_dtype(DType::F32)?;
-        let k = k.to_dtype(DType::F32)?;
-        let v = v.to_dtype(DType::F32)?;
-
-        let att = (q.matmul(&k.t()?)? / scale)?;
+        let q_f32 = q.to_dtype(DType::F32)?;
+        let k_f32 = k.to_dtype(DType::F32)?;
+        let att = q_f32.matmul(&k_f32.transpose(2, 3)?.contiguous()?)?.affine(1.0 / scale, 0.0)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        let y = att.matmul(&v)?;
+        let v_f32 = v.to_dtype(DType::F32)?;
+        let y = att.matmul(&v_f32)?;
         Ok(y.to_dtype(in_dtype)?)
     }
 }
