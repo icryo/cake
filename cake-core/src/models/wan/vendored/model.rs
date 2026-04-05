@@ -173,8 +173,18 @@ impl WanModel {
         rope_cos: &Tensor,
         rope_sin: &Tensor,
     ) -> Result<Tensor> {
-        for block in &self.blocks {
+        for (i, block) in self.blocks.iter().enumerate() {
             hidden = block.forward(&hidden, context, timestep_proj, rope_cos, rope_sin)?;
+            if i == 0 || i == 14 || i == 29 || i == self.blocks.len() - 1 {
+                let mean: f32 = hidden.to_dtype(candle_core::DType::F32)?.mean_all()?.to_scalar()?;
+                let std: f32 = {
+                    let flat = hidden.to_dtype(candle_core::DType::F32)?.flatten_all()?;
+                    let m = flat.mean(0)?;
+                    let var: f32 = flat.broadcast_sub(&m)?.sqr()?.mean(0)?.to_scalar()?;
+                    var.sqrt()
+                };
+                log::info!("block {i}: mean={mean:+.6}, std={std:.6}");
+            }
         }
         Ok(hidden)
     }
